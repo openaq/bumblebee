@@ -3,7 +3,7 @@
   "description": "transform functions for OpenAQ",
   "runtime": "nodejs6.10",
   "handler": "lib.handler",
-  "memory": 1024,
+  "memory": 1472,
   "timeout": 300,
 	"hooks": {
 		"build": "../../node_modules/.bin/webpack --config ../../webpack.config.babel.js --bail",

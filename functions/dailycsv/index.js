@@ -1,7 +1,11 @@
 var aws = require('aws-sdk');
-var flatten = require('lodash.flatten');
-var pLimit = require('p-limit');
 var pify = require('pify');
+var pull = require('pull-stream');
+var paramap = require('pull-paramap');
+var file = require('pull-file');
+var Write = require('pull-write-file');
+var split = require('pull-split');
+var utf8 = require('pull-utf8-decoder');
 
 var s3 = new aws.S3();
 var listObjects = pify(s3.listObjectsV2.bind(s3));
@@ -27,65 +31,61 @@ async function handler(e, ctx, callback) {
   var prefix = parts.join('/');
   console.info('Got event for key:', key);
 
+  let totaljson = '/tmp/out.ndjson';
+
   console.info(`Reading ${bucket}/${prefix}`);
   try {
-    let rows = await concatenateDir(bucket, prefix);
-    console.info(`Files successfully concatenated`);
+    await pify(concatenateDir)(bucket, prefix, totaljson);
+    console.info(`Files successfully concatenated.`);
   } catch (err) {
-    console.error('Error concatenating files'); 
+    console.error('Error concatenating files.'); 
     return callback(err);
   }
 
-  // file is a string of ndjson
-  console.info(`There are ${rows.length} records`);
-  var csvRows = rows.map((data, idx) => {
-    let d = {}
-    try {
-      d = JSON.parse(data);
-      return buildCSVRow(d);
-    } catch (e) {
-      console.error(e, idx, data);
-      callback(e);
-    }
-  });
-
-  try {
-    console.info(`Adding CSV with ${csvRows.length} records to S3`);
-
-    // Join into line delimited file
-    var csv = csvRows.join('\n');
-
-    // Put in S3
-    let success = await putObject({ Bucket: bucket, Key: `daily/${date}.csv`, Body: csv});
-    callback(null, success);
-  } catch (err) {
-    console.error('Error adding concatenated file to S3');
-    return callback(err);
-  }
+  // Read back the concatenated file, transform it and push to S3
+  pull(
+    file(totaljson),
+    utf8(),
+    split('\n', null, false, true),
+    pull.map(x => {
+      try {
+        return JSON.parse(x);
+      } catch (e) {
+        console.error(e, x); 
+        callback(e);
+      }
+    }),
+    pull.map(buildCSVRow),
+    pull.collect(async function (err, values) {
+      console.info(`Pushing ${values.length} records to an S3 CSV.`)
+      if (err) callback(err);
+      let success = await putObject({ 
+        Bucket: bucket, 
+        Key: `daily/${date}.csv`, 
+        Body: values.join('\n')
+      });
+      callback(null, success);
+    })
+  )
 }
 
 /**
- * Concatenates file contents from an S3 directory and returns an array
- * of measurements
+ * Concatenates file contents from an S3 directory into an outfile
  * @param {string} bucket - S3 bucket
  * @param {string} key - Key representing a directory from which to read files
+ * @param {string} outfile - Where to write the contents of the S3 bucket
  */
-async function concatenateDir (bucket, key) {
-  const limit = pLimit(1);
+async function concatenateDir (bucket, key, outfile, callback) {
   let list = await listObjects({ Bucket: bucket, Prefix: key});
-  let tasks = list.Contents.map(item => {
-    return limit(() => getObject({Bucket: bucket, Key: item.Key}));
-  });
 
-  return Promise.all(tasks).then(results => {
-    let contents = results
-      .map(result => {
-        return result.Body.toString()
-          .split('\n')
-          .filter(str => str.length > 0);
-      });
-    return flatten(contents);
-  });
+  pull(
+    pull.values(list.Contents),
+    paramap((item, cb) => {
+      s3.getObject({Bucket: bucket, Key: item.Key}, cb)
+    }, 1),
+    pull.map(result => Buffer.concat([result.Body, new Buffer('\n')])),
+    Write(outfile, callback)
+  );
 }
 
 /**

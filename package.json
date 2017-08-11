@@ -26,6 +26,13 @@
     "lodash.flatten": "^4.4.0",
     "p-limit": "^1.1.0",
     "pify": "^3.0.0",
+    "pull-file": "^1.0.0",
+    "pull-ndjson": "^0.1.1",
+    "pull-paramap": "^1.2.2",
+    "pull-split": "^0.2.0",
+    "pull-stream": "^3.6.0",
+    "pull-utf8-decoder": "^1.0.2",
+    "pull-write-file": "^0.2.4",
     "webpack": "^3.5.3"
   }
 }
