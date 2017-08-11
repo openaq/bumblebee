@@ -31,9 +31,8 @@ module.exports.handler = function (e, ctx, callback) {
 
     console.info(`Files successfully concatenated`);
     // file is a string of ndjson
-    var jsonRows = rows.filter(row => row.length > 0)
-    console.info(`There are ${jsonRows.length} records`);
-    var csvRows = jsonRows.map((data, idx) => {
+    console.info(`There are ${rows.length} records`);
+    var csvRows = rows.map((data, idx) => {
       let d = {}
       try {
         d = JSON.parse(data);
@@ -57,7 +56,10 @@ module.exports.handler = function (e, ctx, callback) {
         console.error('Error adding concatenated file to S3');
         return callback(err);
       }
-      else return callback(null, data);
+      else {
+        console.log('Succesfully added file to S3');
+        return callback(null, data);
+      }
     })
   });
 }
@@ -91,7 +93,11 @@ function concatenateDir (bucket, key, callback) {
         if (err) callback(err);
         else {
           let contents = results
-            .map(result => result.Body.toString().split('\n'));
+            .map(result => {
+              return result.Body.toString()
+                .split('\n')
+                .filter(str => str.length > 0);
+            });
           callback(null, flatten(contents));
         }
       });
