@@ -32,11 +32,6 @@ export default {
     new Webpack.LoaderOptionsPlugin({
       minimize: true,
       debug: false,
-    }),
-    new Webpack.optimize.UglifyJsPlugin({
-      compress: { warnings: false },
-      output: { comments: false },
-      sourceMaps: false,
-    }),
+    })
   ],
 };

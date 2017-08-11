@@ -1,9 +1,14 @@
 var aws = require('aws-sdk');
 var flatten = require('lodash.flatten');
-var async = require('async');
-var s3 = new aws.S3();
+var pLimit = require('p-limit');
+var pify = require('pify');
 
-module.exports.handler = function (e, ctx, callback) {
+var s3 = new aws.S3();
+var listObjects = pify(s3.listObjectsV2.bind(s3));
+var getObject = pify(s3.getObject.bind(s3));
+var putObject = pify(s3.putObject.bind(s3));
+
+async function handler(e, ctx, callback) {
   var event = e.Records[0];
 
   /** 
@@ -23,45 +28,40 @@ module.exports.handler = function (e, ctx, callback) {
   console.info('Got event for key:', key);
 
   console.info(`Reading ${bucket}/${prefix}`);
-  concatenateDir(bucket, prefix, (err, rows) => {
-    if (err) {
-      console.error('Error concatenating files');
-      return callback(err);
-    }
-
+  try {
+    let rows = await concatenateDir(bucket, prefix);
     console.info(`Files successfully concatenated`);
-    // file is a string of ndjson
-    console.info(`There are ${rows.length} records`);
-    var csvRows = rows.map((data, idx) => {
-      let d = {}
-      try {
-        d = JSON.parse(data);
-        return buildCSVRow(d);
-      } catch (e) {
-        console.error(e, idx, data);
-        callback(e);
-      }
-    });
+  } catch (err) {
+    console.error('Error concatenating files'); 
+    return callback(err);
+  }
+
+  // file is a string of ndjson
+  console.info(`There are ${rows.length} records`);
+  var csvRows = rows.map((data, idx) => {
+    let d = {}
+    try {
+      d = JSON.parse(data);
+      return buildCSVRow(d);
+    } catch (e) {
+      console.error(e, idx, data);
+      callback(e);
+    }
+  });
+
+  try {
+    console.info(`Adding CSV with ${csvRows.length} records to S3`);
 
     // Join into line delimited file
     var csv = csvRows.join('\n');
 
-    console.info(`Adding CSV with ${csvRows.length} records to S3`);
-    s3.putObject({
-      Bucket: bucket, 
-      Key: `daily/${date}.csv`,
-      Body: csv
-    }, function (err, data) {
-      if (err) {
-        console.error('Error adding concatenated file to S3');
-        return callback(err);
-      }
-      else {
-        console.log('Succesfully added file to S3');
-        return callback(null, data);
-      }
-    })
-  });
+    // Put in S3
+    let success = await putObject({ Bucket: bucket, Key: `daily/${date}.csv`, Body: csv});
+    callback(null, success);
+  } catch (err) {
+    console.error('Error adding concatenated file to S3');
+    return callback(err);
+  }
 }
 
 /**
@@ -69,40 +69,23 @@ module.exports.handler = function (e, ctx, callback) {
  * of measurements
  * @param {string} bucket - S3 bucket
  * @param {string} key - Key representing a directory from which to read files
- * @param concatenatDirCallback callback - Callback on function error or success
  */
-function concatenateDir (bucket, key, callback) {
-  s3.listObjectsV2({
-    Bucket: bucket, 
-    Prefix: key
-  }, function (err, data) {
-    if (err) return callback(err);
-    else {
+async function concatenateDir (bucket, key) {
+  const limit = pLimit(1);
+  let list = await listObjects({ Bucket: bucket, Prefix: key});
+  let tasks = list.Contents.map(item => {
+    return limit(() => getObject({Bucket: bucket, Key: item.Key}));
+  });
 
-      // Download 
-      var tasks = data.Contents.map(function (Obj) {
-        return function (done) {
-          s3.getObject({Bucket: bucket, Key: Obj.Key}, function (err, data) {
-            if (err) done(err);
-            else done(null, data);
-          });
-        }
+  return Promise.all(tasks).then(results => {
+    let contents = results
+      .map(result => {
+        return result.Body.toString()
+          .split('\n')
+          .filter(str => str.length > 0);
       });
-
-      async.parallel(tasks, function (err, results) {
-        if (err) callback(err);
-        else {
-          let contents = results
-            .map(result => {
-              return result.Body.toString()
-                .split('\n')
-                .filter(str => str.length > 0);
-            });
-          callback(null, flatten(contents));
-        }
-      });
-    }
-  })
+    return flatten(contents);
+  });
 }
 
 /**
@@ -141,3 +124,7 @@ function buildCSVRow (m) {
 
   return quotedRow.join(',');
 };
+
+module.exports = {
+  handler
+}
