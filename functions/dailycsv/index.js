@@ -90,7 +90,8 @@ async function concatenateDir (bucket, key, outfile, callback) {
 
 /**
  * Build a CSV row from a measurement
- * Header: location, value, unit, parameter, country, city, sourceName, date_utc, date_local, sourceType, mobile, latitude, longitude
+ * Header: location, value, unit, parameter, country, city, sourceName, date_utc, date_local, 
+ *  sourceType, mobile, latitude, longitude, averagingPeriodValue, averagingPeriodUnit
  * @param {object} m measurement object
  * @return {string} a string representing one row in a CSV
  */
@@ -108,16 +109,26 @@ function buildCSVRow (m) {
     m.sourceType,
     m.mobile
   ];
-  var latitude = '';
-  var longitude = '';
 
   // Handle geo
+  var latitude = '';
+  var longitude = '';
   if (m.coordinates) {
     latitude = m.coordinates.latitude || '';
     longitude = m.coordinates.longitude || '';
   }
   row.push(latitude);
   row.push(longitude);
+
+  // Handle averaging
+  var period = '';
+  var unit = '';
+  if (m.averagingPeriod) {
+    period = m.averagingPeriod.value,
+    unit = m.averagingPeriod.unit
+  }
+  row.push(period);
+  row.push(unit);
 
   // Add double quotes to each field
   var quotedRow = row.map(item => `"${item}"`);
